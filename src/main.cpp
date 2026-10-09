@@ -28,9 +28,9 @@ const float LANE_X[3] = { -2.0f, 0.0f, 2.0f };
 const float FORWARD_SPEED         = 9.0f;
 const float LANE_SWITCH_SPEED     = 10.0f;
 const float CHASE_DISTANCE_NORMAL = 4.0f;
-const float CHASE_DISTANCE_HIT    = 2.6f;
+const float CHASE_DISTANCE_HIT    = 1.3f;
 const float CHASE_RECOVER_SPEED   = 1.2f;
-const float GAME_OVER_DISTANCE    = 0.95f;
+const float GAME_OVER_DISTANCE    = 1.4f;
 const float WORLD_RECYCLE_LENGTH  = 220.0f;
 const float PLAYER_COLLIDE_RADIUS = 0.9f;
 const float COIN_COLLIDE_RADIUS   = 0.9f;
@@ -333,18 +333,6 @@ std::vector<Prop> obstacles;
 std::vector<Coin> coins;
 std::vector<Power> powers;
 std::vector<vec3> scenery;
-struct Fork {
-    float z;
-    bool left;
-    bool right;
-    bool resolved;
-    int selectedSide;
-};
-std::vector<Fork> forks;
-float roadOffsetX = 0.0f;
-float forkBaseOffset = 0.0f;
-int forkChoice = 0;
-int activeFork = -1;
 
 float randRange(float lo, float hi) { return lo + (float)rand() / RAND_MAX * (hi - lo); }
 float lerp(float a, float b, float t) { return a + (b - a) * t; }
@@ -353,19 +341,13 @@ void initProps() {
     obstacles.clear(); coins.clear(); powers.clear();
     scenery.clear();
     for (int i = 0; i < 24; i++) {
-        ObstacleType type = static_cast<ObstacleType>(rand() % 7);
+        ObstacleType type = static_cast<ObstacleType>(rand() % 6);
         obstacles.push_back({ -18.0f - i * 13.0f + randRange(-2,2), rand() % 3, true, type });
     }
     for (int i = 0; i < 25; i++)
         coins.push_back({ -8.0f - i * 6.0f + randRange(-1,1), rand() % 3, true });
-    // Power-ups are deliberately rare: one appears roughly every 90 metres.
-    for (int i = 0; i < 4; i++)
-        powers.push_back({ -55.0f - i * 90.0f, rand() % 3, true, (i % 2) ? PowerType::Speed : PowerType::Magnet });
-    forks.clear();
-    for (int i = 0; i < 6; i++) {
-        int layout = i % 3;
-        forks.push_back({ -42.0f - i * 72.0f, layout != 1, layout != 0, false, 0 });
-    }
+    for (int i = 0; i < 8; i++)
+        powers.push_back({ -35.0f - i * 36.0f, rand() % 3, true, (i % 2) ? PowerType::Speed : PowerType::Magnet });
     for (int i = 0; i < 28; i++) {
         float z = -12.0f - i * 11.0f;
         scenery.push_back(vec3(-6.0f - (i % 4) * 0.8f, 0.0f, z));
@@ -380,7 +362,6 @@ void resetGame() {
     jumpY = 0.0f; jumpVelocity = 0.0f; slideTimer = 0.0f;
     speedLevel = 0.0f; magnetTimer = 0.0f; speedBoostTimer = 0.0f;
     stumbleCount = 0; stumbleGraceTimer = 0.0f; worldTime = 0.0f;
-    roadOffsetX = 0.0f; forkBaseOffset = 0.0f; forkChoice = 0; activeFork = -1;
     initProps();
     printf("New game started. Score: 0\n");
 }
@@ -393,18 +374,13 @@ float dist2D(float x1, float z1, float x2, float z2) {
 void recycleProps() {
     for (auto& o : obstacles) if (o.z > playerZ + 10.0f) {
         o.z -= WORLD_RECYCLE_LENGTH; o.lane = rand() % 3; o.active = true;
-        o.type = static_cast<ObstacleType>(rand() % 7);
+        o.type = static_cast<ObstacleType>(rand() % 6);
     }
     for (auto& c : coins) if (c.z > playerZ + 10.0f) {
         c.z -= WORLD_RECYCLE_LENGTH; c.lane = rand() % 3; c.active = true;
     }
     for (auto& p : powers) if (p.z > playerZ + 10.0f) {
-        p.z -= WORLD_RECYCLE_LENGTH * 2.0f; p.lane = rand() % 3; p.active = true;
-    }
-    for (auto& fork : forks) if (fork.z > playerZ + 18.0f) {
-        fork.z -= WORLD_RECYCLE_LENGTH;
-        fork.resolved = false;
-        fork.selectedSide = 0;
+        p.z -= WORLD_RECYCLE_LENGTH; p.lane = rand() % 3; p.active = true;
     }
     for (auto& tree : scenery) if (tree.z > playerZ + 18.0f)
         tree.z -= WORLD_RECYCLE_LENGTH;
@@ -419,29 +395,28 @@ bool obstacleAvoided(const Prop& o) {
 
 void checkCollisions() {
     for (auto& o : obstacles) {
-        if (o.active && dist2D(playerX, playerZ, roadOffsetX + LANE_X[o.lane], o.z) < PLAYER_COLLIDE_RADIUS && !obstacleAvoided(o)) {
+        if (o.active && dist2D(playerX, playerZ, LANE_X[o.lane], o.z) < PLAYER_COLLIDE_RADIUS && !obstacleAvoided(o)) {
             o.active = false;
             if (stumbleGraceTimer <= 0.0f) stumbleCount = 0;
             isSlowed = true; slowTimer = 0.65f;
             speedBoostTimer = 0.0f;
             stumbleCount++;
             stumbleGraceTimer = 2.8f;
-            chaseGap = (stumbleCount == 1) ? CHASE_DISTANCE_HIT : 0.65f;
+            chaseGap = (stumbleCount == 1) ? CHASE_DISTANCE_HIT : 0.9f;
             o.z -= WORLD_RECYCLE_LENGTH;
             printf("Hit an obstacle! Monkey is closing in.\n");
-            break;
         }
     }
     for (auto& c : coins) {
         if (!c.active) continue;
-        if (dist2D(playerX, playerZ, roadOffsetX + LANE_X[c.lane], c.z) < COIN_COLLIDE_RADIUS) {
+        if (dist2D(playerX, playerZ, LANE_X[c.lane], c.z) < COIN_COLLIDE_RADIUS) {
             c.active = false; score += 10;
         }
     }
     for (auto& p : powers) {
         if (!p.active) continue;
         float collectDistance = (magnetTimer > 0.0f) ? 5.0f : COIN_COLLIDE_RADIUS;
-        if (dist2D(playerX, playerZ, roadOffsetX + LANE_X[p.lane], p.z) < collectDistance) {
+        if (dist2D(playerX, playerZ, LANE_X[p.lane], p.z) < collectDistance) {
             p.active = false;
             if (p.type == PowerType::Magnet) magnetTimer = POWERUP_DURATION;
             else {
@@ -458,7 +433,7 @@ void checkCollisions() {
     }
     if (magnetTimer > 0.0f) {
         for (auto& c : coins) {
-            if (c.active && dist2D(playerX, playerZ, roadOffsetX + LANE_X[c.lane], c.z) < 5.5f) {
+            if (c.active && dist2D(playerX, playerZ, LANE_X[c.lane], c.z) < 5.5f) {
                 c.active = false; score += 10;
             }
         }
@@ -481,37 +456,7 @@ void update(float dt) {
         if (slowTimer <= 0.0f) isSlowed = false;
     }
     playerZ -= speed * dt;
-    for (int i = 0; i < static_cast<int>(forks.size()); ++i) {
-        float distanceToFork = playerZ - forks[i].z;
-        if (!forks[i].resolved && distanceToFork <= 15.0f && distanceToFork >= -1.0f) {
-            if (activeFork != i) {
-                activeFork = i;
-                forkBaseOffset = roadOffsetX;
-                forkChoice = 0;
-                printf("DEAD END AHEAD: ");
-                if (forks[i].left) printf("A = left road");
-                if (forks[i].left && forks[i].right) printf(", ");
-                if (forks[i].right) printf("D = right road");
-                printf(".\n");
-            }
-            break;
-        }
-        if (!forks[i].resolved && distanceToFork < -1.0f) {
-            gameOver = true;
-            printf("You reached the dead end without choosing a road. GAME OVER.\n");
-            break;
-        }
-        if (forks[i].resolved && distanceToFork < -18.0f && activeFork == i) {
-            activeFork = -1;
-            forkChoice = 0;
-        }
-    }
-    float desiredRoadOffset = roadOffsetX;
-    if (activeFork >= 0 && forkChoice != 0)
-        desiredRoadOffset = (forkChoice < 0) ? forkBaseOffset - 4.8f : forkBaseOffset + 4.8f;
-    roadOffsetX = lerp(roadOffsetX, desiredRoadOffset, std::min(1.0f, 3.0f * dt));
-    playerX = lerp(playerX, roadOffsetX + LANE_X[currentLane],
-                   std::min(1.0f, LANE_SWITCH_SPEED * dt));
+    playerX = lerp(playerX, LANE_X[currentLane], std::min(1.0f, LANE_SWITCH_SPEED * dt));
     if (jumpY > 0.0f || jumpVelocity > 0.0f) {
         jumpY += jumpVelocity * dt;
         jumpVelocity -= 18.0f * dt;
@@ -609,41 +554,14 @@ void drawGround() {
 }
 
 void drawPath() {
-    float roadEnd = playerZ - 140.0f;
-    int upcomingFork = -1;
-    float nearestForkZ = -100000.0f;
-    for (int i = 0; i < static_cast<int>(forks.size()); ++i) {
-        if (forks[i].z < playerZ + 12.0f && forks[i].z > nearestForkZ) {
-            upcomingFork = i;
-            nearestForkZ = forks[i].z;
-        }
-    }
-    if (upcomingFork >= 0) roadEnd = forks[upcomingFork].z;
-    float roadLength = std::max(1.0f, playerZ - roadEnd);
-    float roadMiddle = (playerZ + roadEnd) * 0.5f;
-    drawMesh(cubeMesh, glm::translate(mat4(1.0f), vec3(forkBaseOffset, 0, roadMiddle))
-                      * glm::scale(mat4(1.0f), vec3(6.4f, 0.02f, roadLength)), vec3(0.55f, 0.52f, 0.48f));
+    drawMesh(cubeMesh, glm::translate(mat4(1.0f), vec3(0, 0, playerZ - 80.0f))
+                      * glm::scale(mat4(1.0f), vec3(6.4f, 0.02f, 240.0f)), vec3(0.55f, 0.52f, 0.48f));
     for (int i = -1; i <= 1; i += 2)
-        drawMesh(cubeMesh, glm::translate(mat4(1.0f), vec3(forkBaseOffset + i * 1.0f, 0.01f, roadMiddle))
-                          * glm::scale(mat4(1.0f), vec3(0.06f, 0.03f, roadLength)), vec3(0.35f, 0.33f, 0.30f));
+        drawMesh(cubeMesh, glm::translate(mat4(1.0f), vec3(i * 1.0f, 0.01f, playerZ - 80.0f))
+                          * glm::scale(mat4(1.0f), vec3(0.06f, 0.03f, 240.0f)), vec3(0.35f, 0.33f, 0.30f));
     for (int side = -1; side <= 1; side += 2)
-        drawMesh(cubeMesh, glm::translate(mat4(1.0f), vec3(forkBaseOffset + side * 3.4f, 0.02f, roadMiddle))
-                          * glm::scale(mat4(1.0f), vec3(0.5f, 0.05f, roadLength)), vec3(0.30f, 0.27f, 0.24f));
-
-    for (const auto& fork : forks) {
-        if (fork.z > playerZ + 24.0f || fork.z < playerZ - 140.0f) continue;
-        drawMesh(cubeMesh, glm::translate(mat4(1.0f), vec3(forkBaseOffset, 0.9f, fork.z))
-                  * glm::scale(mat4(1.0f), vec3(6.3f, 1.8f, 0.35f)), vec3(0.16f, 0.14f, 0.12f));
-        for (int side : {-1, 1}) {
-            bool available = (side < 0) ? fork.left : fork.right;
-            if (fork.resolved) available = fork.selectedSide == side;
-            if (!available) continue;
-            float branchX = forkBaseOffset + side * 4.8f;
-            float branchStart = fork.z - 70.0f;
-            drawMesh(cubeMesh, glm::translate(mat4(1.0f), vec3(branchX, 0.015f, (fork.z + branchStart) * 0.5f))
-                      * glm::scale(mat4(1.0f), vec3(6.4f, 0.025f, 70.0f)), vec3(0.47f, 0.43f, 0.36f));
-        }
-    }
+        drawMesh(cubeMesh, glm::translate(mat4(1.0f), vec3(side * 3.4f, 0.02f, playerZ - 80.0f))
+                          * glm::scale(mat4(1.0f), vec3(0.5f, 0.05f, 240.0f)), vec3(0.30f, 0.27f, 0.24f));
 }
 
 void drawTree(float x, float z) {
@@ -674,7 +592,6 @@ void drawObstacle(float x, float z, int variant) {
                  * glm::scale(mat4(1.0f), vec3(0.65f, 1.2f, 0.65f)), vec3(0.95f, 0.15f, 0.02f));
         return;
     }
-
     if (type == ObstacleType::Gap) {
         drawMesh(cubeMesh, glm::translate(mat4(1.0f), vec3(x, -0.04f, z))
                  * glm::scale(mat4(1.0f), vec3(1.1f, 0.04f, 1.0f)), vec3(0.04f, 0.05f, 0.07f));
@@ -694,10 +611,6 @@ void drawObstacle(float x, float z, int variant) {
                  * glm::scale(mat4(1.0f), vec3(0.35f, 1.7f, 0.35f)), vec3(0.35f, 0.16f, 0.06f));
     else
         drawMesh(sphereMesh, glm::translate(mat4(1.0f), vec3(x, 0.4f, z)) * glm::scale(mat4(1.0f), vec3(0.5f, 0.4f, 0.5f)), vec3(0.45f, 0.43f, 0.4f));
-}
-
-float worldLaneX(int lane) {
-    return roadOffsetX + LANE_X[lane];
 }
 
 void drawCoin(float x, float z) {
@@ -726,19 +639,10 @@ void drawSceneryAlongPath() {
 
 void drawPower(const Power& p) {
     vec3 color = (p.type == PowerType::Magnet) ? vec3(0.15f, 0.75f, 1.0f) : vec3(1.0f, 0.35f, 0.05f);
-    mat4 m = glm::translate(mat4(1.0f), vec3(worldLaneX(p.lane), 1.0f + 0.12f * sinf(worldTime * 4.0f), p.z))
+    mat4 m = glm::translate(mat4(1.0f), vec3(LANE_X[p.lane], 1.0f + 0.12f * sinf(worldTime * 4.0f), p.z))
            * glm::rotate(mat4(1.0f), worldTime, vec3(0, 1, 0))
            * glm::scale(mat4(1.0f), vec3(0.34f));
-    if (p.type == PowerType::Magnet) {
-        drawMesh(cylMesh, m * glm::rotate(mat4(1.0f), glm::radians(90.0f), vec3(1, 0, 0))
-                 * glm::scale(mat4(1.0f), vec3(0.7f, 0.18f, 0.7f)), color);
-        drawMesh(cubeMesh, m * glm::translate(mat4(1.0f), vec3(-0.18f, 0, 0))
-                 * glm::scale(mat4(1.0f), vec3(0.16f, 0.42f, 0.16f)), vec3(0.85f, 0.08f, 0.08f));
-    } else {
-        drawMesh(coneMesh, m * glm::rotate(mat4(1.0f), glm::radians(90.0f), vec3(1, 0, 0))
-                 * glm::scale(mat4(1.0f), vec3(0.8f, 1.2f, 0.8f)), color);
-        drawMesh(cubeMesh, m * glm::scale(mat4(1.0f), vec3(0.22f, 0.6f, 0.22f)), vec3(1.0f, 0.75f, 0.08f));
-    }
+    drawMesh(sphereMesh, m, color);
 }
 
 
@@ -789,18 +693,6 @@ void keyCallback(GLFWwindow* window, int key, int, int action, int) {
     } else if (cameraPaused) {
         if (key == GLFW_KEY_ESCAPE) glfwSetWindowShouldClose(window, GLFW_TRUE);
         return;
-    } else if (activeFork >= 0 && key == GLFW_KEY_A && currentLane == 0 && forks[activeFork].left) {
-        // A turns from the leftmost lane onto the left branch.
-        forkChoice = -1;
-        forks[activeFork].resolved = true;
-        forks[activeFork].selectedSide = -1;
-        printf("Left fork selected.\n");
-    } else if (activeFork >= 0 && key == GLFW_KEY_D && currentLane == 2 && forks[activeFork].right) {
-        // D turns from the rightmost lane onto the right branch.
-        forkChoice = 1;
-        forks[activeFork].resolved = true;
-        forks[activeFork].selectedSide = 1;
-        printf("Right fork selected.\n");
     } else if (key == GLFW_KEY_A || key == GLFW_KEY_LEFT) {
         if (currentLane > 0) currentLane--;
     } else if (key == GLFW_KEY_D || key == GLFW_KEY_RIGHT) {
@@ -904,7 +796,7 @@ int main() {
 
     printf("=========================================\n");
     printf(" TEMPLE RUN PROTOTYPE (GLFW + GLAD + OpenGL)\n");
-    printf(" Controls: A/D or LEFT/RIGHT = change lane; at a fork A = left, D = right\n");
+    printf(" Controls: A/D or LEFT/RIGHT arrows = change lane\n");
     printf("           W/UP = jump, S/DOWN = slide, R = restart\n");
     printf("           SPACE = pause/free camera, WASD/QE + mouse = explore\n");
     printf("           P = Phong shading, G = Gouraud shading\n");
@@ -967,8 +859,8 @@ int main() {
         drawPath();
         drawSceneryAlongPath();
         drawTemple();
-        for (auto& o : obstacles) if (o.active) drawObstacle(worldLaneX(o.lane), o.z, static_cast<int>(o.type));
-        for (auto& c : coins) if (c.active) drawCoin(worldLaneX(c.lane), c.z);
+        for (auto& o : obstacles) if (o.active) drawObstacle(LANE_X[o.lane], o.z, static_cast<int>(o.type));
+        for (auto& c : coins) if (c.active) drawCoin(LANE_X[c.lane], c.z);
         for (auto& p : powers) if (p.active) drawPower(p);
         drawPlayer();
         drawMonkey();
