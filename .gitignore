@@ -1,0 +1,10 @@
+# Build output
+src/output/main.exe
+
+# Common C/C++ build artifacts
+*.o
+*.obj
+*.pdb
+*.ilk
+*.gch
+*.log
