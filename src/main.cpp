@@ -333,8 +333,15 @@ std::vector<Prop> obstacles;
 std::vector<Coin> coins;
 std::vector<Power> powers;
 std::vector<vec3> scenery;
-std::vector<float> forkPoints;
+struct Fork {
+    float z;
+    bool left;
+    bool right;
+    bool resolved;
+};
+std::vector<Fork> forks;
 float roadOffsetX = 0.0f;
+float forkBaseOffset = 0.0f;
 int forkChoice = 0;
 int activeFork = -1;
 
@@ -353,8 +360,11 @@ void initProps() {
     // Power-ups are deliberately rare: one appears roughly every 90 metres.
     for (int i = 0; i < 4; i++)
         powers.push_back({ -55.0f - i * 90.0f, rand() % 3, true, (i % 2) ? PowerType::Speed : PowerType::Magnet });
-    forkPoints.clear();
-    for (int i = 0; i < 6; i++) forkPoints.push_back(-42.0f - i * 72.0f);
+    forks.clear();
+    for (int i = 0; i < 6; i++) {
+        int layout = i % 3;
+        forks.push_back({ -42.0f - i * 72.0f, layout != 1, layout != 0, false });
+    }
     for (int i = 0; i < 28; i++) {
         float z = -12.0f - i * 11.0f;
         scenery.push_back(vec3(-6.0f - (i % 4) * 0.8f, 0.0f, z));
@@ -369,7 +379,7 @@ void resetGame() {
     jumpY = 0.0f; jumpVelocity = 0.0f; slideTimer = 0.0f;
     speedLevel = 0.0f; magnetTimer = 0.0f; speedBoostTimer = 0.0f;
     stumbleCount = 0; stumbleGraceTimer = 0.0f; worldTime = 0.0f;
-    roadOffsetX = 0.0f; forkChoice = 0; activeFork = -1;
+    roadOffsetX = 0.0f; forkBaseOffset = 0.0f; forkChoice = 0; activeFork = -1;
     initProps();
     printf("New game started. Score: 0\n");
 }
@@ -390,8 +400,10 @@ void recycleProps() {
     for (auto& p : powers) if (p.z > playerZ + 10.0f) {
         p.z -= WORLD_RECYCLE_LENGTH * 2.0f; p.lane = rand() % 3; p.active = true;
     }
-    for (float& fork : forkPoints) if (fork > playerZ + 18.0f)
-        fork -= WORLD_RECYCLE_LENGTH;
+    for (auto& fork : forks) if (fork.z > playerZ + 18.0f) {
+        fork.z -= WORLD_RECYCLE_LENGTH;
+        fork.resolved = false;
+    }
     for (auto& tree : scenery) if (tree.z > playerZ + 18.0f)
         tree.z -= WORLD_RECYCLE_LENGTH;
 }
@@ -467,20 +479,34 @@ void update(float dt) {
         if (slowTimer <= 0.0f) isSlowed = false;
     }
     playerZ -= speed * dt;
-    for (int i = 0; i < static_cast<int>(forkPoints.size()); ++i) {
-        float distanceToFork = playerZ - forkPoints[i];
-        if (distanceToFork <= 10.0f && distanceToFork >= -18.0f) {
-            if (activeFork != i && forkChoice == 0)
-                printf("FORK AHEAD: press D for LEFT road or A for RIGHT road.\n");
-            activeFork = i;
+    for (int i = 0; i < static_cast<int>(forks.size()); ++i) {
+        float distanceToFork = playerZ - forks[i].z;
+        if (!forks[i].resolved && distanceToFork <= 15.0f && distanceToFork >= -1.0f) {
+            if (activeFork != i) {
+                activeFork = i;
+                forkBaseOffset = roadOffsetX;
+                forkChoice = 0;
+                printf("DEAD END AHEAD: ");
+                if (forks[i].left) printf("D = left road");
+                if (forks[i].left && forks[i].right) printf(", ");
+                if (forks[i].right) printf("A = right road");
+                printf(".\n");
+            }
             break;
         }
-        if (distanceToFork < -18.0f && activeFork == i) {
+        if (!forks[i].resolved && distanceToFork < -1.0f) {
+            gameOver = true;
+            printf("You reached the dead end without choosing a road. GAME OVER.\n");
+            break;
+        }
+        if (forks[i].resolved && distanceToFork < -18.0f && activeFork == i) {
             activeFork = -1;
             forkChoice = 0;
         }
     }
-    float desiredRoadOffset = (forkChoice < 0) ? -4.5f : (forkChoice > 0 ? 4.5f : roadOffsetX);
+    float desiredRoadOffset = roadOffsetX;
+    if (activeFork >= 0 && forkChoice != 0)
+        desiredRoadOffset = (forkChoice < 0) ? forkBaseOffset - 4.8f : forkBaseOffset + 4.8f;
     roadOffsetX = lerp(roadOffsetX, desiredRoadOffset, std::min(1.0f, 3.0f * dt));
     playerX = lerp(playerX, roadOffsetX + LANE_X[currentLane],
                    std::min(1.0f, LANE_SWITCH_SPEED * dt));
@@ -586,17 +612,24 @@ void drawPath() {
     for (int i = -1; i <= 1; i += 2)
         drawMesh(cubeMesh, glm::translate(mat4(1.0f), vec3(roadOffsetX + i * 1.0f, 0.01f, playerZ - 80.0f))
                           * glm::scale(mat4(1.0f), vec3(0.06f, 0.03f, 240.0f)), vec3(0.35f, 0.33f, 0.30f));
-    for (int side = -1; side <= 1; side += 2)
+    for (int side = -1; side <= 1; side += 2) {
         drawMesh(cubeMesh, glm::translate(mat4(1.0f), vec3(roadOffsetX + side * 3.4f, 0.02f, playerZ - 80.0f))
                           * glm::scale(mat4(1.0f), vec3(0.5f, 0.05f, 240.0f)), vec3(0.30f, 0.27f, 0.24f));
-    for (float forkZ : forkPoints) {
-        if (forkZ > playerZ + 24.0f || forkZ < playerZ - 140.0f) continue;
-        for (int side : {-1, 1}) {
-            float branchX = roadOffsetX + side * 4.7f;
-            drawMesh(cubeMesh, glm::translate(mat4(1.0f), vec3((roadOffsetX + branchX) * 0.5f, 0.015f, forkZ + side * 5.0f))
-                      * glm::rotate(mat4(1.0f), glm::radians(side * 18.0f), vec3(0, 1, 0))
-                      * glm::scale(mat4(1.0f), vec3(3.8f, 0.025f, 10.0f)),
-                      vec3(0.47f, 0.43f, 0.36f));
+    }
+    for (const auto& fork : forks) {
+            if (fork.z > playerZ + 24.0f || fork.z < playerZ - 140.0f) continue;
+            // The dark stone barrier is the actual dead end the player must turn
+            // away from; branch slabs show which escape roads exist.
+            drawMesh(cubeMesh, glm::translate(mat4(1.0f), vec3(roadOffsetX, 0.9f, fork.z))
+                      * glm::scale(mat4(1.0f), vec3(6.3f, 1.8f, 0.35f)),
+                      vec3(0.16f, 0.14f, 0.12f));
+            for (int side : {-1, 1}) {
+                if ((side < 0 && !fork.left) || (side > 0 && !fork.right)) continue;
+                float branchX = roadOffsetX + side * 5.0f;
+                drawMesh(cubeMesh, glm::translate(mat4(1.0f), vec3((roadOffsetX + branchX) * 0.5f, 0.015f, fork.z + side * 7.0f))
+                          * glm::rotate(mat4(1.0f), glm::radians(side * 22.0f), vec3(0, 1, 0))
+                          * glm::scale(mat4(1.0f), vec3(4.0f, 0.025f, 12.0f)),
+                          vec3(0.47f, 0.43f, 0.36f));
         }
     }
 }
@@ -744,13 +777,15 @@ void keyCallback(GLFWwindow* window, int key, int, int action, int) {
     } else if (cameraPaused) {
         if (key == GLFW_KEY_ESCAPE) glfwSetWindowShouldClose(window, GLFW_TRUE);
         return;
-    } else if (activeFork >= 0 && key == GLFW_KEY_D) {
+    } else if (activeFork >= 0 && key == GLFW_KEY_D && forks[activeFork].left) {
         // The requested classroom control scheme: D selects the left branch.
         forkChoice = -1;
+        forks[activeFork].resolved = true;
         printf("Left fork selected.\n");
-    } else if (activeFork >= 0 && key == GLFW_KEY_A) {
+    } else if (activeFork >= 0 && key == GLFW_KEY_A && forks[activeFork].right) {
         // A selects the right branch while a fork decision is active.
         forkChoice = 1;
+        forks[activeFork].resolved = true;
         printf("Right fork selected.\n");
     } else if (key == GLFW_KEY_A || key == GLFW_KEY_LEFT) {
         if (currentLane > 0) currentLane--;
