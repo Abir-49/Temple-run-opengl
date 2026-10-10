@@ -7,6 +7,7 @@
             "command": "g++",
             "args": [
                 "-g",
+                "-O2",
                 "-std=c++17",
                 "${workspaceFolder}\\src\\main.cpp",
                 "${workspaceFolder}\\src\\glad.c",
@@ -18,15 +19,10 @@
                 "-o",
                 "${workspaceFolder}\\src\\output\\main.exe"
             ],
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
+            "options": { "cwd": "${workspaceFolder}" },
             "problemMatcher": ["$gcc"],
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            },
-            "detail": "Compiles main.cpp + glad.c, links against lib/libglfw3dll.a"
+            "group": { "kind": "build", "isDefault": true },
+            "detail": "Compiles main.cpp (which #includes all the other headers) + glad.c"
         }
     ]
 }

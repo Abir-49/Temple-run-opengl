@@ -1,5 +1,6 @@
 # Build output
 src/output/main.exe
+src/output/shaders.exe
 
 # Common C/C++ build artifacts
 *.o
